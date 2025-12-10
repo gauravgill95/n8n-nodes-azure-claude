@@ -9,15 +9,20 @@ import {
 import {
   BaseChatModel,
   type BaseChatModelParams,
+  type BaseChatModelCallOptions,
 } from '@langchain/core/language_models/chat_models';
-import { type BaseLanguageModelInput } from '@langchain/core/language_models/base';
 import { type BaseMessage, HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
 import { type ChatResult } from '@langchain/core/outputs';
 import { type CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
+import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import AnthropicFoundry from '@anthropic-ai/foundry-sdk';
 
+interface ChatAnthropicFoundryCallOptions extends BaseChatModelCallOptions {
+  tools?: any[];
+}
+
 // Define a custom LangChain Chat Model wrapper for Anthropic Foundry
-class ChatAnthropicFoundry extends BaseChatModel {
+class ChatAnthropicFoundry extends BaseChatModel<ChatAnthropicFoundryCallOptions> {
   private client: AnthropicFoundry;
   private modelName: string;
   private temperature: number;
@@ -59,8 +64,35 @@ class ChatAnthropicFoundry extends BaseChatModel {
       else if (msg._getType() === 'system') role = 'system';
       else role = 'user'; // Fallback
 
-      // Extract content string (handling simple string content for now)
-      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      // Extract content string or handle array content
+      let content: any = msg.content;
+      
+      // Handle Tool Calls in Assistant Messages (history)
+      if (msg._getType() === 'ai' && (msg as AIMessage).tool_calls?.length) {
+         const toolCalls = (msg as AIMessage).tool_calls || [];
+         if (toolCalls.length > 0) {
+             content = toolCalls.map(tc => ({
+                 type: 'tool_use',
+                 id: tc.id,
+                 name: tc.name,
+                 input: tc.args
+             }));
+             // If there is also text content, it should be prepended as a text block
+             if (msg.content && typeof msg.content === 'string') {
+                 content.unshift({ type: 'text', text: msg.content });
+             }
+         }
+      }
+      
+      // Handle Tool Messages (results)
+      if (msg._getType() === 'tool') {
+          role = 'user'; // Tool results are 'user' messages in Anthropic
+          content = [{
+              type: 'tool_result',
+              tool_use_id: (msg as any).tool_call_id,
+              content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+          }];
+      }
 
       return { role, content };
     });
@@ -79,18 +111,50 @@ class ChatAnthropicFoundry extends BaseChatModel {
       params.system = systemMessage.content;
     }
 
+    if (options.tools && options.tools.length > 0) {
+      params.tools = options.tools.map((tool: any) => {
+          // Check if it's already an Anthropic tool
+          if (tool.input_schema) return tool;
+
+          // Convert to OpenAI Tool first (LangChain util handles generic tool types)
+          const openAITool = convertToOpenAITool(tool);
+          return {
+            name: openAITool.function.name,
+            description: openAITool.function.description,
+            input_schema: openAITool.function.parameters,
+          };
+      });
+    }
+
     const response = await this.client.messages.create(params);
 
-    const content = response.content.reduce((acc, block) => {
-        if (block.type === 'text') return acc + block.text;
-        return acc;
-    }, '');
+    // Parse Response
+    let textContent = '';
+    const toolCalls: any[] = [];
+
+    for (const block of response.content) {
+        if (block.type === 'text') {
+            textContent += block.text;
+        } else if (block.type === 'tool_use') {
+            toolCalls.push({
+                name: block.name,
+                args: block.input,
+                id: block.id,
+                type: 'tool_call'
+            });
+        }
+    }
+
+    const aiMessage = new AIMessage({
+        content: textContent,
+        tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+    });
 
     return {
       generations: [
         {
-          text: content,
-          message: new AIMessage(content),
+          text: textContent,
+          message: aiMessage,
         },
       ],
     };
