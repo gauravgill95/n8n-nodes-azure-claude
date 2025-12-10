@@ -10,12 +10,16 @@ import {
   BaseChatModel,
   type BaseChatModelParams,
   type BaseChatModelCallOptions,
+  type BindToolsInput,
 } from '@langchain/core/language_models/chat_models';
-import { type BaseMessage, HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
+import { type BaseLanguageModelInput } from '@langchain/core/language_models/base';
+import { type BaseMessage, HumanMessage, AIMessage, SystemMessage, AIMessageChunk } from '@langchain/core/messages';
 import { type ChatResult } from '@langchain/core/outputs';
 import { type CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
+import { Runnable } from '@langchain/core/runnables';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import AnthropicFoundry from '@anthropic-ai/foundry-sdk';
+import { NodeConnectionType } from 'n8n-workflow';
 
 interface ChatAnthropicFoundryCallOptions extends BaseChatModelCallOptions {
   tools?: any[];
@@ -50,6 +54,24 @@ class ChatAnthropicFoundry extends BaseChatModel<ChatAnthropicFoundryCallOptions
 
   _llmType() {
     return 'azure_anthropic_foundry';
+  }
+
+  override bindTools(
+    tools: BindToolsInput[],
+    kwargs?: Partial<ChatAnthropicFoundryCallOptions>
+  ): Runnable<BaseLanguageModelInput, AIMessageChunk, ChatAnthropicFoundryCallOptions> {
+    // @ts-ignore
+    return this.bind({
+      tools: tools.map((tool) => {
+        const openAITool = convertToOpenAITool(tool);
+        return {
+          name: openAITool.function.name,
+          description: openAITool.function.description,
+          input_schema: openAITool.function.parameters,
+        };
+      }),
+      ...kwargs,
+    } as Partial<ChatAnthropicFoundryCallOptions>) as unknown as Runnable<BaseLanguageModelInput, AIMessageChunk, ChatAnthropicFoundryCallOptions>;
   }
 
   async _generate(
@@ -112,18 +134,7 @@ class ChatAnthropicFoundry extends BaseChatModel<ChatAnthropicFoundryCallOptions
     }
 
     if (options.tools && options.tools.length > 0) {
-      params.tools = options.tools.map((tool: any) => {
-          // Check if it's already an Anthropic tool
-          if (tool.input_schema) return tool;
-
-          // Convert to OpenAI Tool first (LangChain util handles generic tool types)
-          const openAITool = convertToOpenAITool(tool);
-          return {
-            name: openAITool.function.name,
-            description: openAITool.function.description,
-            input_schema: openAITool.function.parameters,
-          };
-      });
+      params.tools = options.tools;
     }
 
     const response = await this.client.messages.create(params);
