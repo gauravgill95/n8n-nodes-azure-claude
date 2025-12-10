@@ -65,11 +65,8 @@ class ChatAnthropicFoundry extends BaseChatModel {
       return { role, content };
     });
 
-    // Filter out system messages for the top-level parameter if using 'system' param
-    // But Anthropic API often takes 'system' as a top level param.
-    // We'll separate them.
-    const systemMessage = formattedMessages.find(m => m.role === 'system');
     const conversationMessages = formattedMessages.filter(m => m.role !== 'system');
+    const systemMessage = formattedMessages.find(m => m.role === 'system');
 
     const params: any = {
       model: this.modelName,
@@ -114,6 +111,12 @@ export class AzureAnthropic implements INodeType {
     // Define inputs/outputs for LangChain Model
 		inputs: [],
 		outputs: ['ai_languageModel'],
+    codex: {
+      categories: ['AI'],
+      subcategories: {
+        AI: ['Language Models', 'Chat Models'],
+      },
+    },
 		credentials: [
 			{
 				name: 'azureAnthropicApi',
