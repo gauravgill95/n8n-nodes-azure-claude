@@ -1,0 +1,45 @@
+{
+  "name": "n8n-nodes-azure-anthropic",
+  "version": "0.1.0",
+  "description": "n8n node to interact with Azure Anthropic models",
+  "keywords": [
+    "n8n-community-node-package"
+  ],
+  "license": "MIT",
+  "homepage": "",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gauravgill95/n8n-nodes-azure-claude.git"
+  },
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tslint -p tsconfig.json -c tslint.json",
+    "lintfix": "tslint --fix -p tsconfig.json -c tslint.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "nodes": [
+      "dist/nodes/AzureAnthropic/AzureAnthropic.node.js"
+    ],
+    "credentials": [
+      "dist/credentials/AzureAnthropicApi.credentials.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.6",
+    "@types/request-promise-native": "~1.0.15",
+    "n8n-core": "*",
+    "n8n-workflow": "*",
+    "prettier": "^2.7.1",
+    "tslint": "^6.1.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/foundry-sdk": "^0.2.0"
+  }
+}
