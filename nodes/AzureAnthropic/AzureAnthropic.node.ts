@@ -16,7 +16,7 @@ import { type BaseLanguageModelInput } from '@langchain/core/language_models/bas
 import { type BaseMessage, HumanMessage, AIMessage, SystemMessage, AIMessageChunk } from '@langchain/core/messages';
 import { type ChatResult } from '@langchain/core/outputs';
 import { type CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
-import { Runnable } from '@langchain/core/runnables';
+import { Runnable, RunnableBinding } from '@langchain/core/runnables';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import AnthropicFoundry from '@anthropic-ai/foundry-sdk';
 import { NodeConnectionType } from 'n8n-workflow';
@@ -60,18 +60,25 @@ class ChatAnthropicFoundry extends BaseChatModel<ChatAnthropicFoundryCallOptions
     tools: BindToolsInput[],
     kwargs?: Partial<ChatAnthropicFoundryCallOptions>
   ): Runnable<BaseLanguageModelInput, AIMessageChunk, ChatAnthropicFoundryCallOptions> {
-    // @ts-ignore
-    return this.bind({
-      tools: tools.map((tool) => {
+    const formattedTools = tools.map((tool) => {
         const openAITool = convertToOpenAITool(tool);
         return {
           name: openAITool.function.name,
           description: openAITool.function.description,
           input_schema: openAITool.function.parameters,
         };
-      }),
-      ...kwargs,
-    } as Partial<ChatAnthropicFoundryCallOptions>) as unknown as Runnable<BaseLanguageModelInput, AIMessageChunk, ChatAnthropicFoundryCallOptions>;
+    });
+
+    // Instead of calling this.bind() (which might be missing), return a new RunnableBinding directly
+    // This is safer as it uses the imported RunnableBinding class
+    return new RunnableBinding({
+      bound: this as unknown as Runnable<BaseLanguageModelInput, AIMessageChunk, ChatAnthropicFoundryCallOptions>,
+      kwargs: {
+        tools: formattedTools,
+        ...kwargs,
+      },
+      config: {},
+    });
   }
 
   async _generate(
