@@ -40,6 +40,8 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
-    "@anthropic-ai/foundry-sdk": "^0.2.0"
+    "@anthropic-ai/foundry-sdk": "^0.2.0",
+    "@langchain/anthropic": "^1.2.3",
+    "@langchain/core": "^1.1.4"
   }
 }

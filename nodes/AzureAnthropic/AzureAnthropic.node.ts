@@ -3,23 +3,117 @@ import {
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
-	NodeOperationError,
+  ISupplyDataFunctions,
+  SupplyData,
 } from 'n8n-workflow';
+import {
+  BaseChatModel,
+  type BaseChatModelParams,
+} from '@langchain/core/language_models/chat_models';
+import { type BaseLanguageModelInput } from '@langchain/core/language_models/base';
+import { type BaseMessage, HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
+import { type ChatResult } from '@langchain/core/outputs';
+import { type CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import AnthropicFoundry from '@anthropic-ai/foundry-sdk';
+
+// Define a custom LangChain Chat Model wrapper for Anthropic Foundry
+class ChatAnthropicFoundry extends BaseChatModel {
+  private client: AnthropicFoundry;
+  private modelName: string;
+  private temperature: number;
+  private maxTokens: number;
+
+  constructor(fields: BaseChatModelParams & {
+    apiKey: string;
+    baseUrl: string;
+    apiVersion: string;
+    modelName: string;
+    temperature?: number;
+    maxTokens?: number;
+  }) {
+    super(fields);
+    this.modelName = fields.modelName;
+    this.temperature = fields.temperature ?? 1.0;
+    this.maxTokens = fields.maxTokens ?? 1024;
+    
+    this.client = new AnthropicFoundry({
+      apiKey: fields.apiKey,
+      baseURL: fields.baseUrl,
+      defaultQuery: { 'api-version': fields.apiVersion },
+    });
+  }
+
+  _llmType() {
+    return 'azure_anthropic_foundry';
+  }
+
+  async _generate(
+    messages: BaseMessage[],
+    options: this['ParsedCallOptions'],
+    runManager?: CallbackManagerForLLMRun
+  ): Promise<ChatResult> {
+    const formattedMessages = messages.map((msg) => {
+      let role: 'user' | 'assistant' | 'system';
+      if (msg._getType() === 'human') role = 'user';
+      else if (msg._getType() === 'ai') role = 'assistant';
+      else if (msg._getType() === 'system') role = 'system';
+      else role = 'user'; // Fallback
+
+      // Extract content string (handling simple string content for now)
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+
+      return { role, content };
+    });
+
+    // Filter out system messages for the top-level parameter if using 'system' param
+    // But Anthropic API often takes 'system' as a top level param.
+    // We'll separate them.
+    const systemMessage = formattedMessages.find(m => m.role === 'system');
+    const conversationMessages = formattedMessages.filter(m => m.role !== 'system');
+
+    const params: any = {
+      model: this.modelName,
+      messages: conversationMessages,
+      max_tokens: this.maxTokens,
+      temperature: this.temperature,
+    };
+
+    if (systemMessage) {
+      params.system = systemMessage.content;
+    }
+
+    const response = await this.client.messages.create(params);
+
+    const content = response.content.reduce((acc, block) => {
+        if (block.type === 'text') return acc + block.text;
+        return acc;
+    }, '');
+
+    return {
+      generations: [
+        {
+          text: content,
+          message: new AIMessage(content),
+        },
+      ],
+    };
+  }
+}
 
 export class AzureAnthropic implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Azure Anthropic',
+		displayName: 'Azure Anthropic Chat Model',
 		name: 'azureAnthropic',
 		icon: 'fa:comment',
 		group: ['transform'],
 		version: 1,
 		description: 'Interact with Azure Anthropic models via Foundry SDK',
 		defaults: {
-			name: 'Azure Anthropic',
+			name: 'Azure Anthropic Chat Model',
 		},
-		inputs: ['main'],
-		outputs: ['main'],
+    // Define inputs/outputs for LangChain Model
+		inputs: [],
+		outputs: ['ai_languageModel'],
 		credentials: [
 			{
 				name: 'azureAnthropicApi',
@@ -43,21 +137,6 @@ export class AzureAnthropic implements INodeType {
 				description: 'The API version to use (e.g., 2023-06-01)',
 			},
 			{
-				displayName: 'Messages',
-				name: 'messages',
-				type: 'json',
-				default: '[]',
-				required: true,
-				description: 'The messages to send to the model. Format: [{"role": "user", "content": "Hello"}]',
-			},
-			{
-				displayName: 'System Message',
-				name: 'system',
-				type: 'string',
-				default: '',
-				description: 'System message to prompt the model',
-			},
-			{
 				displayName: 'Max Tokens',
 				name: 'maxTokens',
 				type: 'number',
@@ -78,70 +157,27 @@ export class AzureAnthropic implements INodeType {
 		],
 	};
 
-	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-		const items = this.getInputData();
-		const returnData: INodeExecutionData[] = [];
+  async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
+    const credentials = await this.getCredentials('azureAnthropicApi');
+    const apiKey = credentials.apiKey as string;
+    const baseUrl = credentials.baseUrl as string;
+    
+    const deploymentName = this.getNodeParameter('deploymentName', itemIndex) as string;
+    const apiVersion = this.getNodeParameter('apiVersion', itemIndex) as string;
+    const maxTokens = this.getNodeParameter('maxTokens', itemIndex) as number;
+    const temperature = this.getNodeParameter('temperature', itemIndex) as number;
 
-		for (let i = 0; i < items.length; i++) {
-			try {
-				const credentials = await this.getCredentials('azureAnthropicApi');
-				const apiKey = credentials.apiKey as string;
-				const baseUrl = credentials.baseUrl as string;
-				
-				const deploymentName = this.getNodeParameter('deploymentName', i) as string;
-				const apiVersion = this.getNodeParameter('apiVersion', i) as string;
-				const messages = this.getNodeParameter('messages', i) as any;
-				const system = this.getNodeParameter('system', i) as string;
-				const maxTokens = this.getNodeParameter('maxTokens', i) as number;
-				const temperature = this.getNodeParameter('temperature', i) as number;
+    const model = new ChatAnthropicFoundry({
+      apiKey,
+      baseUrl,
+      apiVersion,
+      modelName: deploymentName,
+      maxTokens,
+      temperature,
+    });
 
-				// Initialize Anthropic Foundry client
-				// Note: apiVersion is passed as a query parameter via defaultQuery
-				const client = new AnthropicFoundry({
-					apiKey: apiKey,
-					baseURL: baseUrl,
-					defaultQuery: { 'api-version': apiVersion },
-				});
-
-				const params: any = {
-					model: deploymentName,
-					messages: typeof messages === 'string' ? JSON.parse(messages) : messages,
-					max_tokens: maxTokens,
-					temperature: temperature,
-				};
-
-				if (system) {
-					params.system = system;
-				}
-
-				const response = await client.messages.create(params);
-
-				const executionData: INodeExecutionData = {
-					json: response as any,
-					pairedItem: {
-						item: i,
-					},
-				};
-
-				returnData.push(executionData);
-			} catch (error) {
-				if (this.continueOnFail()) {
-					returnData.push({
-						json: {
-							error: (error as Error).message,
-						},
-						pairedItem: {
-							item: i,
-						},
-					});
-					continue;
-				}
-				throw new NodeOperationError(this.getNode(), error as Error, {
-					itemIndex: i,
-				});
-			}
-		}
-
-		return [returnData];
-	}
+    return {
+      response: model,
+    };
+  }
 }
